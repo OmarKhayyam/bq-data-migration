@@ -1,0 +1,126 @@
+***********Table discrepancies*****************
+create table table_discrepancies
+WITH (
+     format = 'TEXTFILE', 
+field_delimiter = '|',
+     external_location = 's3://bqmigration/metadata/table_discrepancies/')  as 
+select databasename as AWSDB, tablename as AWSTable, dataset as BQdataset, "table" as BQtable from
+((select distinct databasename,tablename from amazons3schema) AWS
+full outer join
+(select distinct dataset,"table" from bqstats) BQ
+on upper(AWS.databasename)=upper(BQ.dataset)
+and upper(AWS.tablename)=upper(BQ."table")) joined_table
+where joined_table.tablename is null or joined_table."table" is null;
+
+
+
+***********Column name discrepancies*****************
+create table column_name_discrepancies
+WITH (
+     format = 'TEXTFILE', 
+field_delimiter = '|',
+     external_location = 's3://bqmigration/metadata/column_name_discrepancies/')  as 
+select databasename as AWSDB, tablename as AWSTable, columnname as AWScolumnname,  dataset as BQdataset, "table" as BQtable,column as BQcolumn  from
+(select * from 
+ amazons3schema AWS
+full outer join
+bqstats BQ
+on upper(AWS.databasename)=upper(BQ.dataset)
+and upper(AWS.tablename)=upper(BQ."table")
+and upper(AWS.columnname)=upper(BQ.column)) joined_table
+where joined_table.columnname is null or joined_table.column is null;
+
+
+
+***********Column type discrepancies New*****************
+create table column_type_discrepancies
+WITH (
+     format = 'TEXTFILE', 
+field_delimiter = '|',
+     external_location = 's3://bqmigration/metadata/column_type_discrepancies/')  as 
+
+select BQ_dataset,BQ_table,BQ_columnname,BQ_type,AWS_database,AWS_table,AWS_columnname,AWS_type from
+
+
+(select dataset as BQ_dataset,"table" as BQ_table,column as BQ_columnname, type as BQ_type,
+case when upper(type) in ('INT64','NUMERIC','FLOAT64') then 'NUMERIC'
+when upper(type)='BOOL' then 'BOOLEAN'
+when upper(type)='STRING' then 'STRING'
+when upper(type)='DATE' then 'DATE'
+when upper(type)='BYTES' then 'BINARY'
+when upper(type)='GEOGRAPHY' then 'GEOGRAPHY'
+when upper(type) IN ('DATETIME','TIMESTAMP') then 'TIMESTAMP'
+when upper(type) like 'STRUCT%' OR upper(type) like 'ARRAY%' then 
+replace(replace(replace(replace(replace(upper(type),'INT64','NUMERIC'),'FLOAT64','NUMERIC'),'BOOL','BOOLEAN'),'DATETIME','TIMESTAMP'),' ','')
+ else 'BQ_OTHER' 
+ END 
+ as BQ_standardized_type from bqstats
+) BQ
+
+inner join
+
+
+(select databasename as AWS_database,tablename as AWS_table ,columnname as AWS_columnname, type as AWS_type, 
+case when upper(type) in ('DOUBLE', 'FLOAT', 'TINYINT','SMALLINT','INT','INTEGER','BIGINT') then 'NUMERIC'
+ when upper(type) like 'DECIMAL%' then 'NUMERIC'
+when upper(type)in ('BOOLEAN','BINARY','STRING','TIMESTAMP') then type
+when upper(type)='GEOGRAPHY' then 'GEOGRAPHY'
+when upper(type) like 'CHAR%' then 'STRING'
+when upper(type)='DATE' then 'DATE'
+ when upper(type) like 'VARCHAR%' then 'STRING'
+  when upper(type) like 'STRUCT%' OR upper(type) like 'ARRAY%' then 
+replace(replace(replace(replace(replace(replace(replace(replace(replace(upper(type),'BIGINT','NUMERIC'),'SMALLINT','NUMERIC'),'TINYINT','NUMERIC'),'INTEGER','NUMERIC'),'INT','NUMERIC'),'DOUBLE','NUMERIC'),'FLOAT','NUMERIC'),' ',''),':','')
+ else 'AWS_OTHER' 
+ END 
+ as AWS_standardized_type from amazons3schema
+) AWS
+
+ON upper(AWS_database)= upper(BQ_dataset)
+and
+upper(AWS_table)=upper(BQ_table)
+and
+upper(AWS_columnname)=upper(BQ_columnname)
+and upper(AWS_standardized_type) <> upper(BQ_standardized_type);
+
+
+
+
+
+
+***********Column type discrepancies old*****************
+create table column_type_discrepancies
+WITH (
+     format = 'TEXTFILE', 
+field_delimiter = '|',
+     external_location = 's3://bqmigration/metadata/column_type_discrepancies/')  as 
+select databasename as AWSDB, tablename as AWSTable, columnname as AWScolumnname,  AWS_type as AWS_type, dataset as BQdataset, "table" as BQtable,column as BQcolumn, BQ_type as BQ_type  from
+(select databasename,tablename,columnname,AWS.type as AWS_type,dataset,"table",column, bq.type as BQ_type from 
+ amazons3schema AWS
+inner join
+bqstats BQ
+on upper(AWS.databasename)=upper(BQ.dataset)
+and upper(AWS.tablename)=upper(BQ."table")
+and upper(AWS.columnname)=upper(BQ.column)) joined_table
+where
+(upper(AWS_type) <> upper(BQ_type))
+and(
+(upper(BQ_type) in ('INT64','NUMERIC','FLOAT64') and (upper(AWS_type) not in ('DOUBLE', 'FLOAT', 'TINYINT','SMALLINT','INT','INTEGER','BIGINT') and upper(AWS_type) not like 'DECIMAL%'))
+or
+(upper(BQ_type) in ('BOOL') and upper(AWS_type) not in ('BOOLEAN'))
+or
+(upper(BQ_type) in ('STRING') and (upper(AWS_type) not in ('STRING') and upper(AWS_type) not like '%CHAR%'))
+or
+(upper(BQ_type) in ('BYTES') and upper(AWS_type) not in ('BINARY'))
+or
+(upper(BQ_type) in ('DATETIME') and upper(AWS_type) not in ('TIMESTAMP'))
+or
+(upper(BQ_type) not in ('INT64','NUMERIC','FLOAT64','BOOL','STRING','BYTES','DATETIME'))
+or
+((upper(AWS_type) not in ('DOUBLE', 'FLOAT', 'TINYINT','SMALLINT','INT','INTEGER','BIGINT','BOOLEAN','STRING','BINARY''TIMESTAMP')) and upper(AWS_type) not like '%CHAR%' and upper(AWS_type) not like 'DECIMAL%')
+)
+;
+
+
+
+
+
