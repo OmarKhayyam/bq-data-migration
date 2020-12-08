@@ -1,0 +1,86 @@
+How to use this tool: PLEASE READ EVERYTHING IN THIS HOW-TO BEFORE YOU START USING THIS TOOL
+
+1. Clone this Git Repo and do the following, cd into the cloned Repo:
+	a. Create an AWS user in your target AWS account i.e. where you want the data to be transferred.
+	b. Create the access keys for the abovementioned user and populate it in the aws.creds file in repo's top level directory.
+	c. Your file should look something like this:
+
+		{
+        		"aws_access_key_id": aws access key id in double quotes>,
+        		"aws_secret_access_key": <aws secret key in double quotes>
+		}
+
+	d. Make sure you have your GCP credentilas in some file somewhere in this form,
+
+		{
+  			"type": <type of service account>,
+  			"project_id": <project id>,
+  			"private_key_id": <private key id>,
+  			"private_key": <private key>,
+  			"client_email": <client email for service account>,
+  			"client_id": <client id>,
+  			"auth_uri": <self explanatory>,
+  			"token_uri": <self explanatory>,
+  			"auth_provider_x509_cert_url": <this is provided by GCP>,
+  			"client_x509_cert_url": <this is provided by GCP>
+		}
+
+		This link provide guidance on how to get these: https://cloud.google.com/iam/docs/creating-managing-service-account-keys
+	d. Make sure that the build.sh file has execute permissions i.e. run the following command,
+
+		chmod +x build.sh
+
+2. Run the build.sh file in the directory you find it in. Like so, no arguments.
+
+	./build.sh
+
+3. Next, you run the packagecreds.sh script. Once this is done, you will have a full functional codebundle that you can deploy on a
+Google Dataproc cluster.
+
+	./packagecreds.sh -g <Full path to the file which has the GCP credentials as shown above in point 1.d.>
+
+	The packagecreds.sh script expects a file named aws.creds that contains the AWS credentials in the form mentioned in
+	point 1.c. above. So make sure you have that in place already i.e. before you run the packagecreds.sh.
+
+4. Now we run the orchestrator.py script. This has all the code you need to launch the dataproc cluster, once you are done
+running this script, you are ready to run your jobs that will initiate the data migration from Google BigQuery to Amazon S3.
+To run the orchestrator.py, 
+	
+	./orchestrator.py --bucket <a GCS bucket where we store our code etc...> --prefix <a folder under which the codebundle.zip may be stored> --location <location of the cluster, defaults to US> --ziplocation <directory path to the codebundle - only the directory, the codebundle has to be always named codebundle.zip>  --initfilename <name of the initialization script> --clustername <name for your cluster> --clusterstgbucket <can be an existing staging GCS bucket> --clustertempbucket <temporary GCS bucket for the cluster - can be an existing bucket> --projectid <project id>
+
+	here is an example of such a command:
+	
+	./orchestrator.py --bucket rns_my_bucket_test --prefix mycode/ --location "US" --ziplocation ./build  --initfilename cluster_initialization.sh --clustername rns-my-test-cluster --clusterstgbucket rns_my_staging_bucket --clustertempbucket rns_my_temp_bucket --projectid innate-entry-286804
+
+5. Once the orchestrator completes successfully, you can start jobs on the cluster. To do this, where you initiate the jobs from, you
+need to have gcloud installed, this would be the first job you run on the cluster,
+
+	gcloud dataproc jobs submit pyspark file:///work/move_tables.py --cluster=rns-my-test-cluster --region=us-east1 --properties spark.jars.packages=org.apache.spark:spark-avro_2.12:2.4.7
+
+	Though we would have liked to parameterize everything, we were constrained for time and there are certain things that you can do to
+	change the behavior of the pyspark job.
+
+	You should open the move_tables.py script and change the way it behaves by making changes to the following constants, below are
+	example values for these constants. The changes have to be made prior to running the build.sh script.
+		
+		BQMETADATADESTINATION="rns-lk"
+		GCSRAWDATABUCKET="rns_sample_data_bucket_1"
+		GCSRAWDATAPREFIX="exported_tables/"
+		BQRAWDATAFILESLOCATION="gs://rns_sample_data_bucket_1/exported_tables/"
+		BQMIMICEDDATABUCKET="rns_sample_data_bucket_1"
+		BQMIMICEDDATAPREFIX="BQSTRUCT/"
+
+	What do each of these do?
+		BQMETADATADESTINATION -> name of the Amazon S3 bucket where we intend to store the metadata, this will be used for verification/validation later
+		GCSRAWDATABUCKET -> the GCS bucket where we intend to keep the raw data
+		GCSRAWDATAPREFIX -> the folder under which we will populate the raw data, this will be appended with "raw/"
+		BQRAWDATAFILESLOCATION -> in some cases we need the full path, and we were too lazy to fabricate it from inputs
+		BQMIMICEDDATABUCKET -> the bucket where we mimic the BigQuery data organizations, in terms of partitions we mean.
+		BQMIMICEDDATAPREFIX -> the prefix under which you will find the final BigQuery exported data in either parquet or JSON.
+
+6. Once you have run the above job, we are ready for the actual data transfer, this is, at present done using a MapReduce job i.e. using
+distcp, here is the command,
+
+	gcloud dataproc jobs submit hadoop --cluster=rns-my-test-cluster --region=us-east1 --class=org.apache.hadoop.tools.DistCp -- gs://rns_sample_data_bucket_1/BQSTRUCT/ s3a://<aws access key id>:<aws secret key>@rns-bq-migration/Migrated-Data/
+
+	In the above command, you will have to change --region, --cluster and source and destination according to your preferences.
